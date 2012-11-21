@@ -1,0 +1,44 @@
+<?php
+
+/**
+ * Implementation of hook_schema().
+ */
+function cats_joborders_schema() {
+  $schema['cats_joborders'] = array(
+    'module' => 'CATS Job Orders Connector',
+    'description' => t('Store actual Job Orders.'),
+    'fields' => array(
+      'joborder_id' => array(
+        'description' => t('Job order id.'),
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'disp-width' => '10',
+      ),
+      'title' => array(
+        'description' => t('Job title.'),
+        'type' => 'varchar',
+        'length' => '64',
+        'not null' => TRUE,
+      ),
+      'description' => array(
+        'description' => t('Job description.'),
+        'type' => 'text',
+      ),
+      'status' => array(
+        'description' => t('Status.'),
+        'type' => 'varchar',
+        'length' => '16',
+        'not null' => TRUE,
+      ),
+      'date_modified' => array(
+        'mysql_type' => 'datetime',
+        'not null' => FALSE,
+        'sortable' => TRUE,
+        'views' => TRUE,
+      ),
+    ),
+    'primary key' => array('joborder_id'),
+  );
+  return $schema;
+}

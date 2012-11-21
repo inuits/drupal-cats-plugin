@@ -1,0 +1,410 @@
+<?php
+
+define('CATS_COOKIE_FILE', '/tmp/cats_cook');
+
+/**
+ * Implementation of hook_menu().
+ */
+function cats_joborders_menu() {
+  $items = array();
+  $items['admin/cats_joborders'] = array(
+    'title' => t('CATS Job Orders'),
+    'description' => t('CATS Job Orders settings'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('cats_joborders_settings_form'),
+    'access arguments' => array('administer cats joborders'),
+    'file' => 'cats_joborders.admin.inc',
+  );
+  $items['admin/cats_joborders/settings'] = array(
+    'title' => t('CATS Job Orders'),
+    'description' => t('CATS Job Orders settings'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('cats_joborders_settings_form'),
+    'access arguments' => array('administer cats joborders'),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'file' => 'cats_joborders.admin.inc',
+  );
+  $items['admin/cats_joborders/actions'] = array(
+    'title' => t('CATS Actions'),
+    'description' => t('CATS Job Orders actions'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('cats_joborders_actions_form'),
+    'access arguments' => array('administer cats joborders'),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'cats_joborders.admin.inc',
+    'weight' => 5,
+  );
+  $items['joborder-apply/%'] = array(
+    'title' => t('Job apply'),
+    'description' => t('Job application'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('cats_joborders_apply_form', 1),
+    'access arguments' => array('apply joborders'),
+    'file' => 'cats_joborders.forms.inc',
+    'access callback' => TRUE,
+  );
+  return $items;
+}
+
+/**
+ * Implementation of hook_block_info().
+ */
+function cats_joborders_block_info() {
+  $blocks = array();
+  $blocks['available_job_orders'] = array(
+    'info' => t('Recente jobs'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  return $blocks;
+}
+
+/**
+ * Implementation of hook_block_view().
+ */
+function cats_joborders_block_view($delta = '') {
+  $block = array();
+  switch ($delta) {
+    case 'available_job_orders':
+      $query = db_select('cats_joborders', 'cj')
+      ->fields('cj', array('joborder_id', 'title','description','status','date_modified'))
+      ->condition('cj.status', 'Active')
+      ->orderBy('cj.date_modified', 'DESC')
+      ->range(0, 5)
+      ->execute()
+      ->FetchAll();
+
+      if (!empty($query) && user_access('apply joborders')) {
+        $links = array();
+        foreach ($query as $joborder) {
+          $links[] = array(
+          'title' => t($joborder->title),
+          'href' => 'joborder-description/' . $joborder->joborder_id,
+          );
+        }
+        $block = array(
+          'title' => t('Recente jobs'),
+          'content' => array(
+            '#theme' => 'links',
+            '#links' => $links,
+          ),
+        );
+      }
+      break;
+  }
+  return $block;
+}
+
+/**
+ * Implementation on hook_permission().
+ */
+function cats_joborders_permission() {
+  return array(
+    'administer cats joborders' => array(
+      'title' => t('Administer CATS job orders'),
+    ),
+    'apply joborders' => array(
+      'title' => t('Apply to job orders'),
+    ),
+  );
+}
+
+/**
+ * Implementation on hook_cron().
+ */
+function cats_joborders_cron() {
+  $form = variable_get('cats_form_structure', array());
+  if (empty($form)) {
+    cats_joborders_get_form_structure();
+  }
+  cats_joborders_get_orders();
+}
+
+/**
+ * Connect to CATS server, try to pass authorization and get cookies.
+ */
+function cats_joborders_authorize() {
+  $url = variable_get('cats_url', '');
+  $login = variable_get('cats_login', '');
+  $password = variable_get('cats_password', '');
+  $module = 'login';
+  $action = 'attemptLogin';
+  $url .= "?m=$module&a=$action";
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_COOKIEJAR, CATS_COOKIE_FILE);
+  curl_setopt($ch, CURLOPT_COOKIEFILE, CATS_COOKIE_FILE);
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_FAILONERROR, 1);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  if (variable_get('cats_http_auth', 0)) {
+    $http_user = variable_get('cats_http_auth_user', '');
+    $http_pass = variable_get('cats_http_auth_pass', '');
+    curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+    curl_setopt($ch, CURLOPT_USERPWD, $http_user . ":" . $http_pass);
+  }
+  curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+  curl_setopt($ch, CURLOPT_POST, 1);
+  curl_setopt($ch, CURLOPT_POSTFIELDS, "username=$login&password=$password");
+  $result = curl_exec($ch);
+  curl_close($ch);
+}
+
+/**
+ * Connect to CATS server, authorize and get available job orders.
+ */
+function cats_joborders_get_orders() {
+  $url = variable_get('cats_url', '');
+  $company_id = variable_get('cats_company_id', '');
+  $module = 'jobordersremote';
+  $action = 'getRecentOrders';
+  $url .= "?m=$module&a=$action";
+  if($company_id != '') {
+  	$url .= "&companyID=$company_id";
+  }
+
+  cats_joborders_authorize();
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_COOKIEJAR, CATS_COOKIE_FILE);
+  curl_setopt($ch, CURLOPT_COOKIEFILE, CATS_COOKIE_FILE);
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_FAILONERROR, 1);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  if (variable_get('cats_http_auth', 0)) {
+    $http_user = variable_get('cats_http_auth_user', '');
+    $http_pass = variable_get('cats_http_auth_pass', '');
+    curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+    curl_setopt($ch, CURLOPT_USERPWD, $http_user . ":" . $http_pass);
+  }
+  curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+  $result = curl_exec($ch);
+
+  if ($result) {
+    $error_reporting = error_reporting(error_reporting() ^ E_NOTICE);
+    $result = (array) json_decode($result);
+    error_reporting($error_reporting);
+    if ($result) {
+      if ($result['result'] == 'OK') {
+        cats_joborders_update_joborders($result['data']);
+      }
+      elseif ($result['result'] == 'ERROR') {
+        _cats_joborders_message(t($result['data']), 'system');
+      }
+      curl_close($ch);
+      return TRUE;
+    }
+    else {
+      _cats_joborders_message(t('cats_joborders_get_orders(): Could not parse server response.'), 'system');
+      curl_close($ch);
+      return FALSE;
+    }
+  }
+  else {
+    _cats_joborders_message(t('cats_joborders_get_orders(): Could not connect to CATS. Error: ' . curl_error($ch)), 'system');
+    curl_close($ch);
+    return FALSE;
+  }
+}
+
+/**
+ * Connect to CATS and get Job apply form structure.
+ */
+function cats_joborders_get_form_structure() {
+  $url = variable_get('cats_url', '');
+  $site_id = variable_get('cats_site_id', '');
+  $module = 'jobordersremote';
+  $action = 'getApplyFormStructure';
+  $url .= "?m=$module&a=$action";
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_FAILONERROR, 1);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  if (variable_get('cats_http_auth', 0)) {
+    $http_user = variable_get('cats_http_auth_user', '');
+    $http_pass = variable_get('cats_http_auth_pass', '');
+    curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+    curl_setopt($ch, CURLOPT_USERPWD, $http_user . ":" . $http_pass);
+  }
+  curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+  $result = curl_exec($ch);
+  if ($result) {
+    $error_reporting = error_reporting(error_reporting() ^ E_NOTICE);
+    $result = (array) json_decode($result);
+    error_reporting($error_reporting);
+    if ($result) {
+      if ($result['result'] == 'OK') {
+        variable_set('cats_form_structure', $result['data']);
+      }
+      elseif ($result['result'] == 'ERROR') {
+        _cats_joborders_message(t($result['data']), 'system', t($result['data']));
+      }
+      curl_close($ch);
+      return TRUE;
+    }
+    else {
+      _cats_joborders_message(t('cats_joborders_get_form_structure(): Could not parse server response.'), 'system');
+      curl_close($ch);
+      return FALSE;
+    }
+  }
+  else {
+    _cats_joborders_message(t('cats_joborders_get_form_structure(): Could not connect to CATS. Error: ' . curl_error($ch)), 'system');
+    curl_close($ch);
+    return FALSE;
+  }
+}
+
+/**
+ * Update local Joborders table according to remote state.
+ *
+ * @param array $joborders Array of joborders received from CATS
+ */
+function cats_joborders_update_joborders($joborders) {
+  $query = db_select('cats_joborders');
+  $query->addField('cats_joborders', 'joborder_id');
+  $local_joborders = $query->execute()->fetchAll();
+
+  $to_delete = array();
+  if ($local_joborders) {
+    $to_delete = $local_joborders;
+    foreach ($joborders as $joborder) {
+      foreach ($to_delete as $key => $delete) {
+        if ($delete->joborder_id == $joborder->jobOrderID) {
+          unset($to_delete[$key]);
+        }
+      }
+    }
+
+    foreach ($local_joborders as $local_joborder) {
+      foreach ($joborders as $key => $joborder) {
+        if ($joborder->jobOrderID == $local_joborder->joborder_id) {
+          unset($joborders[$key]);
+        }
+      }
+    }
+  }
+
+  // delete all local joborders which not longer exist on CATS side
+  $conditions = array();
+  foreach ($to_delete as $delete) {
+    $conditions[] = $delete->joborder_id;
+  }
+  if (!empty ($conditions)) {
+    $query = db_delete('cats_joborders');
+    $query->condition('joborder_id', $conditions, 'IN');
+    $query->execute();
+  }
+
+  // and add new joborders
+  $values = array();
+  foreach ($joborders as $joborder) {
+    $date_modified = explode('-', $joborder->dateModified);
+    $joborder->dateModified = '20' . $date_modified[2] . '-' . $date_modified[1] . '-' . $date_modified[0];
+    $values[] = array(
+      'joborder_id' => $joborder->jobOrderID,
+      'title' => $joborder->title,
+      'description' => $joborder->jobDescription,
+      'status' => $joborder->status,
+      'date_modified' => $joborder->dateModified,
+    );
+  }
+  if (!empty($values)) {
+    $query = db_insert('cats_joborders');
+    $query->fields(array('joborder_id', 'title', 'description','status','date_modified'));
+    foreach ($values as $record) {
+      $query->values($record);
+    }
+    $query->execute();
+  }
+}
+
+/**
+ * Post job apply to CATS system.
+ *
+ * @param type $apply Applicant data (filled form values array)
+ * @param type $joborder_id Job order id apply to.
+ */
+function cats_joborders_post_apply($apply, $joborder_id) {
+  $form = variable_get('cats_form_structure', array());
+  $apply = array_intersect_key($apply, $form);
+
+  $url = variable_get('cats_url', '');
+  $module = 'jobordersremote';
+  $action = 'postJobApply';
+  $url .= "?m=$module&a=$action&jobOrderID=$joborder_id";
+
+  cats_joborders_authorize();
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_COOKIEJAR, CATS_COOKIE_FILE);
+  curl_setopt($ch, CURLOPT_COOKIEFILE, CATS_COOKIE_FILE);
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_FAILONERROR, 1);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  if (variable_get('cats_http_auth', 0)) {
+    $http_user = variable_get('cats_http_auth_user', '');
+    $http_pass = variable_get('cats_http_auth_pass', '');
+    curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+    curl_setopt($ch, CURLOPT_USERPWD, $http_user . ":" . $http_pass);
+  }
+  curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+  curl_setopt($ch, CURLOPT_POST, 1);
+  curl_setopt($ch, CURLOPT_POSTFIELDS, $apply);
+  $result = curl_exec($ch);
+
+  if ($result) {
+    $error_reporting = error_reporting(error_reporting() ^ E_NOTICE);
+    $result = (array) json_decode($result);
+    error_reporting($error_reporting);
+    if ($result) {
+      if ($result['result'] == 'OK') {
+        _cats_joborders_message(t('Job apply sent.'));
+      }
+      elseif ($result['result'] == 'ERROR') {
+        _cats_joborders_message(t($result['data']), 'system', t('Error occured when trying to post job apply. Please contact site administrator.'));
+      }
+      curl_close($ch);
+      return TRUE;
+    }
+    else {
+      _cats_joborders_message(t('cats_joborders_post_apply(): Could not parse server response.'), 'system');
+      curl_close($ch);
+      return FALSE;
+    }
+  }
+  else {
+    _cats_joborders_message(t('cats_joborders_post_apply(): Could not connect to CATS. Error: ' . curl_error($ch)), 'system');
+    curl_close($ch);
+    return FALSE;
+  }
+}
+
+/**
+ * Module messaging function.
+ *
+ * In case of type 'user' - message 1 will be showned to user.
+ * If type is 'system' then message 1 will be stored in watchdog log, and message 2 (if it is set)
+ * will be showned to user.
+ *
+ * @param type $message Message number 1
+ * @param type $type Message type
+ * @param type $message2 Message number 2
+ */
+function _cats_joborders_message($message, $type = 'user', $message2 = '') {
+  switch ($type) {
+    case 'user':
+      drupal_set_message($message);
+      break;
+    case 'system':
+      watchdog('cats_joborders', $message, array(), WATCHDOG_ERROR);
+      if (!empty($message2)) {
+        drupal_set_message($message2, 'error');
+      }
+      break;
+  }
+}
